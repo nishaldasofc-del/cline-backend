@@ -42,18 +42,69 @@ export class UserTokens {
 	}
 	/** Returns the userId, or undefined if invalid/expired. */
 	verify(token: string): string | undefined {
+		const r = this.verifyDetailed(token);
+		return r.ok ? r.userId : undefined;
+	}
+	/** Same checks as verify(), but says WHY it failed (category only; never echoes token content). */
+	verifyDetailed(token: string): { ok: true; userId: string } | { ok: false; reason: VerifyFailure; version: string; segments: number } {
 		const parts = token.split(".");
-		if (parts.length !== 3 || parts[0] !== "v1") return undefined;
+		const version = /^v\d{1,2}$/.test(parts[0] ?? "") ? parts[0] : "unparsed";
+		const fail = (reason: VerifyFailure) => ({ ok: false as const, reason, version, segments: parts.length });
+		if (!token) return fail("empty_token");
+		if (parts.length !== 3) return fail("malformed_segments");
+		if (parts[0] !== "v1") return fail("unsupported_version");
 		const expected = b64(createHmac("sha256", this.key).update(`v1.${parts[1]}`).digest());
-		if (!safeEqual(parts[2], expected)) return undefined;
+		if (!safeEqual(parts[2], expected)) return fail("bad_signature");
 		try {
 			const p = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as { sub?: unknown; exp?: unknown };
-			if (typeof p.sub !== "string" || !SAFE_ID.test(p.sub) || typeof p.exp !== "number") return undefined;
-			if (p.exp * 1000 <= this.now()) return undefined;
-			return p.sub;
+			if (typeof p.sub !== "string" || !SAFE_ID.test(p.sub) || typeof p.exp !== "number") return fail("bad_payload");
+			if (p.exp * 1000 <= this.now()) return fail("expired");
+			return { ok: true, userId: p.sub };
 		} catch {
-			return undefined;
+			return fail("bad_payload");
 		}
+	}
+}
+
+export type VerifyFailure = "empty_token" | "malformed_segments" | "unsupported_version" | "bad_signature" | "bad_payload" | "expired";
+export const TOKEN_ALGORITHM = "HMAC-SHA256";
+export const TOKEN_VERSION = "v1";
+
+/** Classify the Authorization header WITHOUT revealing its value (a mis-sent token must never be echoed). */
+export function classifyAuthHeader(header: string | undefined): "missing" | "bearer" | "bearer_empty" | "bearer_wrong_case" | "other_scheme" {
+	if (header === undefined || header === "") return "missing";
+	if (/^bearer\s*$/i.test(header)) return "bearer_empty"; // e.g. `Bearer ${UNSET_VAR}`: HTTP stacks trim the trailing space
+	if (header.startsWith("Bearer ")) return "bearer";
+	if (/^bearer\s/i.test(header)) return "bearer_wrong_case";
+	return "other_scheme";
+}
+
+export interface AuthDiagEvent { route: string; reason: string; scheme: string; version?: string; segments?: number; tokenLength?: number }
+
+/**
+ * TEMPORARY auth diagnostics. Emits category-level facts only: failure reason, header scheme class, token version,
+ * configured algorithm, whether the secret exists. Never the token, the Authorization value, or any secret/derived key.
+ * Rate-limited per (route, reason) so a flood of bad requests cannot flood the logs.
+ */
+export class AuthDiagnostics {
+	private readonly last = new Map<string, { at: number; suppressed: number }>();
+	constructor(
+		private readonly secretConfigured: boolean,
+		private readonly sink: (line: string) => void = (l) => console.log(l),
+		private readonly now: () => number = () => Date.now(),
+		private readonly intervalMs = 10_000,
+	) {}
+	startup(build: string): void {
+		this.sink(`[auth-diag] ready build=${build} algorithm=${TOKEN_ALGORITHM} token_version=${TOKEN_VERSION} secret_configured=${this.secretConfigured}`);
+	}
+	failure(e: AuthDiagEvent): void {
+		const k = `${e.route}|${e.reason}`;
+		const t = this.now();
+		const prev = this.last.get(k);
+		if (prev && t - prev.at < this.intervalMs) { prev.suppressed++; return; }
+		this.last.set(k, { at: t, suppressed: 0 });
+		const extra = [e.version !== undefined ? ` token_version=${e.version}` : "", e.segments !== undefined ? ` segments=${e.segments}` : "", e.tokenLength !== undefined ? ` token_length=${e.tokenLength}` : ""].join("");
+		this.sink(`[auth-diag] verify_failed route=${e.route} reason=${e.reason} header_scheme=${e.scheme}${extra} algorithm=${TOKEN_ALGORITHM} secret_configured=${this.secretConfigured}${prev?.suppressed ? ` (+${prev.suppressed} similar suppressed)` : ""}`);
 	}
 }
 
