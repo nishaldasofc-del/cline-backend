@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { AgentService } from "./agent-service";
 import { createApp, userFromRequest } from "./app";
-import { HttpError, UserTokens } from "./auth";
+import { AuthDiagnostics, HttpError, UserTokens } from "./auth";
 import { BridgeHub } from "./bridge/hub";
 import { assertSafeId } from "./auth";
 import { loadConfig } from "./config";
@@ -25,7 +25,10 @@ const serverDir = join(runDir, "server"); // per-session empty cwds + short-live
 mkdirSync(serverDir, { recursive: true });
 const instanceId = `i_${randomBytes(6).toString("hex")}`; // changes on every boot so clients can detect a restart
 
+const BUILD = "auth-diag-1"; // bump when redeploying to confirm the new code is live (see X-Cline-Build header)
 const tokens = new UserTokens(config.authToken);
+const diag = new AuthDiagnostics(config.authToken.length > 0);
+diag.startup(BUILD);
 const projects = new ProjectStore(config.maxProjectsPerUser);
 const sessions = new SessionStore();
 
@@ -34,7 +37,7 @@ const hub = new BridgeHub({
 	maxPayloadBytes: config.bridgeMaxPayloadBytes,
 	maxPendingPerConn: 8,
 	authenticate: (req, url) => {
-		const userId = userFromRequest(tokens, req); // throws HttpError(401)
+		const userId = userFromRequest(tokens, req, diag); // throws HttpError(401)
 		let projectId: string;
 		try { projectId = assertSafeId("projectId", url.searchParams.get("projectId")); } catch { throw new HttpError(400, "bad projectId"); }
 		try { projects.get(userId, projectId); } catch { throw new HttpError(404, "project not found", "project_not_found"); }
@@ -45,7 +48,7 @@ const hub = new BridgeHub({
 const agent = new AgentService(config, new BridgeWorkspaceProvider(hub, serverDir, config), hub, projects, sessions);
 await agent.init();
 
-const server = createApp({ config, agent, hub, projects, tokens, instanceId }).listen(config.port, config.host, () => {
+const server = createApp({ config, agent, hub, projects, tokens, instanceId, build: BUILD, diag }).listen(config.port, config.host, () => {
 	console.log(`cline-agent-server listening on ${config.host}:${config.port} (${config.providerId}/${config.modelId}, commands=${config.commandsMode}, node ${process.version})`);
 });
 hub.attach(server);
