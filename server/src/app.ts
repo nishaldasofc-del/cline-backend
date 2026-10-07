@@ -25,16 +25,37 @@ export function makeRedactor(secrets: string[]): (s: string) => string {
 	return (s) => list.reduce((acc, sec) => acc.split(sec).join("[redacted]"), s);
 }
 
+/** Header-class failures (no token to inspect yet) mapped to the same category vocabulary as token failures. */
+function headerFailureReason(scheme: ReturnType<typeof classifyAuthHeader>): string {
+	switch (scheme) {
+		case "missing": return "no_authorization_header";
+		case "bearer_empty": return "empty_token";
+		case "bearer_wrong_case": return "scheme_case_mismatch";
+		default: return "not_bearer_scheme";
+	}
+}
+
 export function userFromRequest(tokens: UserTokens, req: IncomingMessage, diag?: AuthDiagnostics): string {
 	const header = req.headers.authorization;
-	const token = bearer(header);
-	const r = tokens.verifyDetailed(token);
-	if (r.ok) return r.userId;
 	const scheme = classifyAuthHeader(header);
-	const route = ((req as { originalUrl?: string }).originalUrl ?? req.url ?? "").split("?")[0].slice(0, 80);
-	if (scheme !== "bearer") diag?.failure({ route, reason: scheme === "missing" ? "no_authorization_header" : scheme === "bearer_empty" ? "empty_token" : scheme === "bearer_wrong_case" ? "scheme_case_mismatch" : "not_bearer_scheme", scheme });
-	else diag?.failure({ route, reason: r.reason, scheme, version: r.version, segments: r.segments, tokenLength: token.length });
+	if (scheme !== "bearer") {
+		diag?.failure({ reason: headerFailureReason(scheme) });
+		throw new HttpError(401, "unauthorized");
+	}
+	const r = tokens.verifyDetailed(bearer(header));
+	if (r.ok) return r.userId;
+	diag?.failure({ reason: r.reason, version: r.version });
 	throw new HttpError(401, "unauthorized");
+}
+
+/**
+ * THE gate for every /v1/* route (except the admin mint route, which is registered before it). Exported so tests mount
+ * and call exactly the function the production app uses, rather than a re-implementation of it.
+ */
+export function requireUser(tokens: UserTokens, diag?: AuthDiagnostics) {
+	return (req: Request, res: Response, next: NextFunction): void => {
+		try { res.locals.userId = userFromRequest(tokens, req, diag); next(); } catch (e) { next(e); }
+	};
 }
 
 export function createApp({ config, agent, hub, projects, tokens, instanceId, build, diag }: AppDeps) {
@@ -52,7 +73,7 @@ export function createApp({ config, agent, hub, projects, tokens, instanceId, bu
 	app.post("/v1/admin/user-tokens", (req, res) => {
 		if (!safeEqual(bearer(req.header("authorization")), config.authToken)) {
 			const scheme = classifyAuthHeader(req.header("authorization"));
-			diag?.failure({ route: "/v1/admin/user-tokens", reason: scheme === "bearer" ? "admin_secret_mismatch" : scheme === "missing" ? "no_authorization_header" : scheme === "bearer_empty" ? "empty_token" : "not_bearer_scheme", scheme });
+			diag?.failure({ reason: scheme === "bearer" ? "admin_secret_mismatch" : headerFailureReason(scheme) });
 			throw new HttpError(401, "unauthorized");
 		}
 		const userId = assertSafeId("userId", req.body?.userId);
@@ -65,9 +86,7 @@ export function createApp({ config, agent, hub, projects, tokens, instanceId, bu
 	});
 
 	// Everything else requires a valid per-user token. The user id comes ONLY from the token.
-	app.use("/v1", (req: Request, res: Response, next: NextFunction) => {
-		try { res.locals.userId = userFromRequest(tokens, req, diag); next(); } catch (e) { next(e); }
-	});
+	app.use("/v1", requireUser(tokens, diag));
 	const uid = (res: Response): string => res.locals.userId as string;
 
 	app.get("/v1/info", (_req, res) => void res.json({ provider: config.providerId, model: config.modelId, commandsMode: config.commandsMode, webFetch: config.enableWebFetch, storage: "ephemeral", instanceId, maxConcurrentTurns: config.maxConcurrentTurns, maxConcurrentTurnsPerUser: config.maxConcurrentTurnsPerUser, ...agent.stats() }));
