@@ -40,8 +40,12 @@ export function createApp({ config, agent, hub, projects, tokens, instanceId }: 
 	app.post("/v1/admin/user-tokens", (req, res) => {
 		if (!safeEqual(bearer(req.header("authorization")), config.authToken)) throw new HttpError(401, "unauthorized");
 		const userId = assertSafeId("userId", req.body?.userId);
-		const ttl = Math.min(Number(req.body?.ttlSeconds) || 3600, config.userTokenMaxTtlSeconds);
-		res.status(201).json(tokens.mint(userId, ttl));
+		// Omitted/null -> 1h default. Anything else must be a positive integer: a zero/negative/fractional TTL used to
+		// mint a token that was already expired, so the very next request got 401. Over-long TTLs are capped.
+		const raw = req.body?.ttlSeconds;
+		const requested = raw === undefined || raw === null ? 3600 : Number(raw);
+		if (!Number.isInteger(requested) || requested <= 0) throw new HttpError(400, "ttlSeconds must be a positive integer");
+		res.status(201).json(tokens.mint(userId, Math.min(requested, config.userTokenMaxTtlSeconds)));
 	});
 
 	// Everything else requires a valid per-user token. The user id comes ONLY from the token.
