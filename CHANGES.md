@@ -36,3 +36,9 @@ Original: 4,166 files / 70.7 MB. This tree: ~910 files (+ `server/`), `node_modu
 - `agent-service.ts`: shutdown aborts turns and reports `server_restarting`; unreadable transcript -> `410` instead of silent empty resume.
 - `config.ts`: defaults `MAX_CONCURRENT_TURNS=1`, `..._PER_USER=1`, `SESSION_IDLE_MS`, `MEMORY_LOG_INTERVAL_MS`; `CLINE_DATA_DIR` defaults to OS temp.
 - Tests: restart test rewritten for the ephemeral contract; new unit + e2e coverage.
+
+## Auth trace + diagnostics (build `auth-diag-2`)
+- `app.ts`: the `/v1` gate is now the exported `requireUser(tokens, diag)`; `createApp` mounts it and the tests call the same function. Accept/reject behaviour is unchanged.
+- `auth.ts`: new failure category `bad_charset`; `AuthDiagnostics` logs only reason, token_version, algorithm, secret_configured.
+- `index.ts`: `[boot] build=… instance=…` line; `X-Cline-Build` includes the Render commit when available.
+- `test/auth-integration.test.ts`: mint → same middleware; secret/user/ttl matrix; two-process split; diagnostics field + no-leak checks; built-bundle run under node.
