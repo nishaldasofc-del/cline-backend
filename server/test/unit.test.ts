@@ -59,6 +59,7 @@ describe("user tokens", () => {
 		expect(clock.verify(short)).toBeUndefined();
 		for (const junk of ["", "v1.a.b", "garbage", `${v}.${p}`]) expect(t.verify(junk)).toBeUndefined();
 	});
+	it.each([0, -5, 0.5, NaN, Infinity])("never mints a dead/invalid token for ttl=%s", (ttl) => { expect(() => t.mint("alice", ttl)).toThrow(/positive integer/); });
 	it("refuses unsafe user ids", () => { expect(() => t.mint("../x", 60)).toThrow(); });
 });
 
