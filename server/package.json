@@ -1,0 +1,25 @@
+{
+	"name": "cline-agent-server",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "bun build ./src/index.ts --outdir ./dist --target node --format esm --packages external",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"@cline/sdk": "workspace:*",
+		"@cline/shared": "workspace:*",
+		"express": "^5.1.0",
+		"ws": "^8.20.0",
+		"zod": "^4.3.6"
+	},
+	"devDependencies": {
+		"@types/express": "^5.0.3",
+		"@types/ws": "^8.18.1"
+	},
+	"engines": {
+		"node": ">=22"
+	}
+}

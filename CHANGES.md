@@ -1,0 +1,38 @@
+# What changed vs. upstream cline-main
+
+Original: 4,166 files / 70.7 MB. This tree: ~910 files (+ `server/`), `node_modules` 1.2 GB → ~211 MB (incl. dev tooling).
+
+## Removed (whole trees)
+- `apps/cli` (CLI/TUI), `apps/vscode` (extension, webview-ui, proto), `apps/cline-hub`, all `apps/examples/*` (desktop-app, menubar, vscode, multi-agent, quickstart, ...)
+- `sdk/packages/ui`, `sdk/examples`, `sdk/scripts`
+- `docs`, `evals`, `.github`, `.agents`, `.claude`, `.codex`, `.cline`, `.vscode`, `.husky`, `patches`, lint/release tooling
+
+## Removed inside `sdk/packages/llms` (provider transports not needed for Groq/OpenAI-compatible)
+- `providers/vendors/`: anthropic, bedrock, cline, community (claude-code / codex-cli / opencode / dify / SAP), google, mistral, ollama, vertex, minimax-thinking
+- `services/langfuse-*`
+- 18 dependencies: @ai-sdk/{amazon-bedrock,anthropic,google,google-vertex,mistral,otel}, @aws-sdk/credential-providers, @jerome-benoit/sap-ai-provider, @langfuse/*, @opentelemetry/{api,context-async-hooks,sdk-trace-node}, ai-sdk-provider-opencode-sdk, dify-ai-provider, ollama-ai-provider-v2
+
+## Edited (all small)
+- `llms/src/providers/ai-sdk.ts`: provider dispatch keeps only `openai` and `openai-compatible`; Langfuse telemetry replaced by no-ops
+- `llms/src/index.ts`: dropped exports of removed modules
+- `core/src/services/telemetry/OpenTelemetryProvider.ts`: dropped one Langfuse import
+- `core/.../handler-factory.test.ts`: removed one SAP-specific test; `core/.../langfuse-relay.test.ts` deleted
+- `shared/package.json`: declared the previously undeclared `nanoid`
+
+## Kept untouched
+`shared`, `agents` and `core` (agent loop, tools, compaction, session persistence, hub/OTel code paths), `sdk` (public entry).
+
+## Added
+`server/` (config, WorkspaceProvider seam, AgentService, Express app), `Dockerfile`, `docker-entrypoint.sh`, `render.yaml`, `.env.example`, `README.md`.
+
+## Known gaps
+- Upstream tests in `llms` that exercise removed providers (anthropic/cline/google/codex...) fail: 54 of 742 across 5 files in `llms/src/providers`. They should be deleted or trimmed.
+- Dockerfile and Render deploy were not run (no Docker here); the server was smoke-tested on Node 22 against a mock OpenAI-compatible endpoint, not real Groq.
+
+## Render Free (no persistent disk)
+- `render.yaml`: plan `free`, persistent disk and `CLINE_DATA_DIR=/var/data/cline` removed; concurrency 1/1; heap cap.
+- `store.ts`: `ProjectStore`/`SessionStore` are in-memory (same API/ownership/404 behavior; constructor paths removed).
+- `index.ts`: Cline files go to a per-process `mkdtemp` dir under an ephemeral base, removed on shutdown; `instanceId`; memory telemetry; graceful shutdown ordering.
+- `agent-service.ts`: shutdown aborts turns and reports `server_restarting`; unreadable transcript -> `410` instead of silent empty resume.
+- `config.ts`: defaults `MAX_CONCURRENT_TURNS=1`, `..._PER_USER=1`, `SESSION_IDLE_MS`, `MEMORY_LOG_INTERVAL_MS`; `CLINE_DATA_DIR` defaults to OS temp.
+- Tests: restart test rewritten for the ephemeral contract; new unit + e2e coverage.

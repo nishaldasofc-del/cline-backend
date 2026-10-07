@@ -1,0 +1,30 @@
+# Render FREE web service. No persistent disk: the filesystem is ephemeral and the project/session
+# registries are in memory. The real project lives on the Android device (reached via the WSS bridge).
+services:
+  - type: web
+    name: cline-agent-server
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false          # set in the Render dashboard (never commit it)
+      - key: SERVER_AUTH_TOKEN
+        generateValue: true  # >= 24 chars; copy it into YOUR app backend's secrets
+      - key: PROVIDER_ID
+        value: groq
+      - key: MODEL_ID
+        value: llama-3.3-70b-versatile
+      - key: COMMANDS_MODE
+        value: allowlist
+      # Conservative limits for 512 MB RAM / 0.1 CPU. Raise only after watching the [mem] log lines.
+      - key: MAX_CONCURRENT_TURNS
+        value: "1"
+      - key: MAX_CONCURRENT_TURNS_PER_USER
+        value: "1"
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=320
+      - key: NODE_VERSION
+        value: "22"
+      # PORT is injected by Render; the server binds 0.0.0.0:$PORT.

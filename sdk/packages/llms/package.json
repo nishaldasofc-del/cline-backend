@@ -1,0 +1,54 @@
+{
+	"name": "@cline/llms",
+	"version": "0.0.90",
+	"description": "Config-driven SDK for selecting, extending, and instantiating LLM providers and models",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/cline/cline",
+		"directory": "sdk/packages/llms"
+	},
+	"main": "./dist/index.js",
+	"module": "./dist/index.js",
+	"engines": {
+		"node": ">=22"
+	},
+	"type": "module",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"browser": "./dist/index.browser.js",
+			"react-server": "./dist/index.browser.js",
+			"import": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		},
+		"./browser": {
+			"import": "./dist/index.browser.js",
+			"types": "./dist/index.browser.d.ts"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "bun run bun.mts && bun tsc -p tsconfig.build.json",
+		"typecheck": "bun tsc -p tsconfig.dev.json --noEmit",
+		"test": "vitest run",
+		"test:live": "vitest run src/tests/provider-live*.test.ts",
+		"test:vcr": "vitest run src/tests/provider-vcr.test.ts",
+		"test:watch": "vitest",
+		"generate:models": "bun run scripts/generate-models.ts"
+	},
+	"dependencies": {
+		"@ai-sdk/gateway": "^4.0.64",
+		"@ai-sdk/openai": "^4.0.47",
+		"@ai-sdk/openai-compatible": "^3.0.27",
+		"@ai-sdk/provider": "^4.0.7",
+		"@ai-sdk/provider-utils": "^5",
+		"@cline/shared": "workspace:*",
+		"@openrouter/ai-sdk-provider": "^3",
+		"@streamparser/json": "^0.0.21",
+		"ai": "^7.0.58",
+		"nanoid": "^5.1.7",
+		"zod": "^4.3.6"
+	}
+}

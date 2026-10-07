@@ -1,0 +1,32 @@
+{
+	"name": "cline-backend",
+	"private": true,
+	"type": "module",
+	"description": "Headless Cline coding-agent backend (Render-ready). Cline SDK runtime + a thin HTTP/SSE server.",
+	"license": "Apache-2.0",
+	"workspaces": [
+		"sdk/packages/*",
+		"server"
+	],
+	"scripts": {
+		"build": "bun run build:sdk && bun run build:server",
+		"build:sdk": "bun --production -F './sdk/packages/*' build",
+		"build:server": "bun -F cline-agent-server build",
+		"start": "node server/dist/index.js",
+		"dev": "bun --conditions=development run server/src/index.ts",
+		"typecheck": "bun -F cline-agent-server typecheck",
+		"test": "bun -F cline-agent-server test",
+		"test:sdk": "bun -F @cline/shared -F @cline/llms -F @cline/agents -F @cline/core test"
+	},
+	"engines": {
+		"node": ">=22",
+		"bun": "1.4.2"
+	},
+	"packageManager": "bun@1.4.2",
+	"devDependencies": {
+		"@types/bun": "^1.4.2",
+		"@types/node": "^25.3.5",
+		"typescript": "^5.9.3",
+		"vitest": "^4.0.18"
+	}
+}
