@@ -33,6 +33,8 @@ export class UserTokens {
 	}
 	mint(userId: string, ttlSeconds: number): { token: string; expiresAt: number } {
 		assertSafeId("userId", userId);
+		// Never issue a token that is already dead (ttl <= 0) or has a fractional/NaN expiry.
+		if (!Number.isInteger(ttlSeconds) || ttlSeconds <= 0) throw new HttpError(400, "ttlSeconds must be a positive integer");
 		const exp = Math.floor(this.now() / 1000) + ttlSeconds;
 		const payload = b64(JSON.stringify({ sub: userId, exp }));
 		const sig = b64(createHmac("sha256", this.key).update(`v1.${payload}`).digest());
