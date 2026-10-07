@@ -6,7 +6,8 @@
 	"scripts": {
 		"build": "bun build ./src/index.ts --outdir ./dist --target node --format esm --packages external",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"test": "vitest run"
+		"test": "vitest run",
+		"test:auth": "vitest run test/auth-integration.test.ts"
 	},
 	"dependencies": {
 		"@cline/sdk": "workspace:*",
