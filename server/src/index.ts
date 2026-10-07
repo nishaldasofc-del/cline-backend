@@ -25,10 +25,13 @@ const serverDir = join(runDir, "server"); // per-session empty cwds + short-live
 mkdirSync(serverDir, { recursive: true });
 const instanceId = `i_${randomBytes(6).toString("hex")}`; // changes on every boot so clients can detect a restart
 
-const BUILD = "auth-diag-1"; // bump when redeploying to confirm the new code is live (see X-Cline-Build header)
+// Build stamp (not a secret). Render exposes the deployed commit as RENDER_GIT_COMMIT; when present it is appended so the
+// X-Cline-Build response header proves which commit is answering. Bump the label when you redeploy.
+const BUILD = `auth-diag-2${process.env.RENDER_GIT_COMMIT ? `+${process.env.RENDER_GIT_COMMIT.slice(0, 7)}` : ""}`;
 const tokens = new UserTokens(config.authToken);
 const diag = new AuthDiagnostics(config.authToken.length > 0);
-diag.startup(BUILD);
+diag.startup();
+console.log(`[boot] build=${BUILD} instance=${instanceId}`); // which code/process this is (kept out of the auth-diag lines)
 const projects = new ProjectStore(config.maxProjectsPerUser);
 const sessions = new SessionStore();
 
