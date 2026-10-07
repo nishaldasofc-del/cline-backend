@@ -68,6 +68,22 @@ describe("e2e: Render-style server + bridge + Cline agent (mock OpenAI-compatibl
 		expect((await api(srv, "GET", "/v1/info", alice)).status).toBe(200);
 	});
 
+	it("regression: a freshly minted user token verifies on /v1/info; unusable TTLs are rejected instead of minting dead tokens", async () => {
+		const m = await api(srv, "POST", "/v1/admin/user-tokens", ADMIN, { userId: "zoe" });
+		expect(m.status).toBe(201); expect(m.json.token).toMatch(/^v1\.[\w-]+\.[\w-]+$/); expect(m.json.expiresAt).toBeGreaterThan(Date.now());
+		expect((await api(srv, "GET", "/v1/info", m.json.token)).status).toBe(200); // mint -> verify -> authenticated route
+		const explicit = await api(srv, "POST", "/v1/admin/user-tokens", ADMIN, { userId: "zoe", ttlSeconds: 120 });
+		expect((await api(srv, "GET", "/v1/info", explicit.json.token)).status).toBe(200);
+		const capped = await api(srv, "POST", "/v1/admin/user-tokens", ADMIN, { userId: "zoe", ttlSeconds: 999_999_999 });
+		expect(capped.json.expiresAt).toBeLessThanOrEqual(Date.now() + 86_400_000 + 5000); // capped to USER_TOKEN_MAX_TTL_SECONDS
+		expect((await api(srv, "GET", "/v1/info", capped.json.token)).status).toBe(200);
+		for (const ttlSeconds of [-5, 0, 0.5, "abc", ""]) { // each of these used to yield 201 + an already-expired (or 3600s-defaulted) token
+			const bad = await api(srv, "POST", "/v1/admin/user-tokens", ADMIN, { userId: "zoe", ttlSeconds });
+			expect(bad.status, `ttlSeconds=${JSON.stringify(ttlSeconds)}`).toBe(400); expect(bad.text).not.toContain("v1.");
+		}
+		expect((await api(srv, "GET", "/v1/info", ADMIN)).status).toBe(401); // still: admin secret is not a user token
+	});
+
 	it("project ownership and cross-user isolation", async () => {
 		const p = await api(srv, "POST", "/v1/projects", alice, { name: "demo" });
 		expect(p.status).toBe(201); projectId = p.json.projectId;
