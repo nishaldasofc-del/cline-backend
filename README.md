@@ -121,3 +121,23 @@ bun run test:sdk                      # upstream package suites
 GROQ_API_KEY=gsk_… bun x vitest run server/test/groq.live.test.ts   # real Groq (skipped without a key)
 ```
 Runtime is plain Node 22; Bun is build-time only.
+
+## Auth diagnostics (TEMPORARY — remove once the production 401 is understood)
+
+Every `/v1/*` 401 logs ONE line (rate-limited per category) with exactly four facts, never a token or secret:
+
+```
+[auth-diag] verify_failed reason=<category> token_version=<v1|v2|unparsed|none> algorithm=HMAC-SHA256 secret_configured=<true|false>
+```
+
+| reason | meaning |
+|---|---|
+| `no_authorization_header` / `not_bearer_scheme` / `scheme_case_mismatch` / `empty_token` | the request never carried a usable `Bearer <token>` (empty = unset shell variable) |
+| `bad_charset` | token contains characters a minted token never has: JSON quotes, a literal `${VAR}`, `\r`, a pasted response body |
+| `malformed_segments` / `unsupported_version` / `bad_payload` | not a `v1.<payload>.<sig>` token |
+| `bad_signature` | well-formed, signed under a **different** `SERVER_AUTH_TOKEN` (mint and verify hit different processes/services, or the secret was rotated) |
+| `expired` | valid signature, past `exp` |
+| `admin_secret_mismatch` | `/v1/admin/user-tokens` called with the wrong admin secret |
+
+Which code/process answered: every response carries `X-Cline-Build` (label + first 7 chars of Render's `RENDER_GIT_COMMIT` when present) and `X-Cline-Instance` (random per boot). `curl -i` the mint call and the `/v1/info` call: different `X-Cline-Instance` values mean two processes handled them.
+Tests: `bun run --cwd server test:auth` (mints a token and runs it through the same `requireUser()` gate, plus the built bundle under node).
