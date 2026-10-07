@@ -1,7 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { AgentService } from "./agent-service";
-import { assertSafeId, bearer, HttpError, safeEqual, type UserTokens } from "./auth";
+import { type AuthDiagnostics, assertSafeId, bearer, classifyAuthHeader, HttpError, safeEqual, type UserTokens } from "./auth";
 import type { ServerConfig } from "./config";
 import type { BridgeHub } from "./bridge/hub";
 import type { ProjectStore } from "./store";
@@ -14,6 +14,9 @@ export interface AppDeps {
 	tokens: UserTokens;
 	/** Random per boot; lets clients notice that the (ephemeral) server state was reset. */
 	instanceId?: string;
+	/** Build stamp (not a secret): lets you confirm which code answered. */
+	build?: string;
+	diag?: AuthDiagnostics;
 }
 
 /** Remove every configured secret from any string that leaves the server. */
@@ -22,23 +25,36 @@ export function makeRedactor(secrets: string[]): (s: string) => string {
 	return (s) => list.reduce((acc, sec) => acc.split(sec).join("[redacted]"), s);
 }
 
-export function userFromRequest(tokens: UserTokens, req: IncomingMessage): string {
-	const userId = tokens.verify(bearer(req.headers.authorization));
-	if (!userId) throw new HttpError(401, "unauthorized");
-	return userId;
+export function userFromRequest(tokens: UserTokens, req: IncomingMessage, diag?: AuthDiagnostics): string {
+	const header = req.headers.authorization;
+	const token = bearer(header);
+	const r = tokens.verifyDetailed(token);
+	if (r.ok) return r.userId;
+	const scheme = classifyAuthHeader(header);
+	const route = ((req as { originalUrl?: string }).originalUrl ?? req.url ?? "").split("?")[0].slice(0, 80);
+	if (scheme !== "bearer") diag?.failure({ route, reason: scheme === "missing" ? "no_authorization_header" : scheme === "bearer_empty" ? "empty_token" : scheme === "bearer_wrong_case" ? "scheme_case_mismatch" : "not_bearer_scheme", scheme });
+	else diag?.failure({ route, reason: r.reason, scheme, version: r.version, segments: r.segments, tokenLength: token.length });
+	throw new HttpError(401, "unauthorized");
 }
 
-export function createApp({ config, agent, hub, projects, tokens, instanceId }: AppDeps) {
+export function createApp({ config, agent, hub, projects, tokens, instanceId, build, diag }: AppDeps) {
 	const app = express();
 	const redact = makeRedactor([config.apiKey, config.authToken]);
 	app.disable("x-powered-by");
+	// Identify which build/process answered (random per-boot id, not a secret). Lets you spot a stale deploy, or a mint and a
+	// verify that landed on different processes/services, straight from the response headers.
+	app.use((_req, res, next) => { if (build) res.setHeader("X-Cline-Build", build); if (instanceId) res.setHeader("X-Cline-Instance", instanceId); next(); });
 	app.use(express.json({ limit: config.maxBodyBytes }));
 
 	app.get("/healthz", (_req, res) => void res.json({ ok: true }));
 
 	// Admin: only the holder of SERVER_AUTH_TOKEN (your app backend) may mint user tokens.
 	app.post("/v1/admin/user-tokens", (req, res) => {
-		if (!safeEqual(bearer(req.header("authorization")), config.authToken)) throw new HttpError(401, "unauthorized");
+		if (!safeEqual(bearer(req.header("authorization")), config.authToken)) {
+			const scheme = classifyAuthHeader(req.header("authorization"));
+			diag?.failure({ route: "/v1/admin/user-tokens", reason: scheme === "bearer" ? "admin_secret_mismatch" : scheme === "missing" ? "no_authorization_header" : scheme === "bearer_empty" ? "empty_token" : "not_bearer_scheme", scheme });
+			throw new HttpError(401, "unauthorized");
+		}
 		const userId = assertSafeId("userId", req.body?.userId);
 		// Omitted/null -> 1h default. Anything else must be a positive integer: a zero/negative/fractional TTL used to
 		// mint a token that was already expired, so the very next request got 401. Over-long TTLs are capped.
@@ -50,7 +66,7 @@ export function createApp({ config, agent, hub, projects, tokens, instanceId }: 
 
 	// Everything else requires a valid per-user token. The user id comes ONLY from the token.
 	app.use("/v1", (req: Request, res: Response, next: NextFunction) => {
-		try { res.locals.userId = userFromRequest(tokens, req); next(); } catch (e) { next(e); }
+		try { res.locals.userId = userFromRequest(tokens, req, diag); next(); } catch (e) { next(e); }
 	});
 	const uid = (res: Response): string => res.locals.userId as string;
 
