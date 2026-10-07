@@ -51,6 +51,9 @@ export class UserTokens {
 		const version = /^v\d{1,2}$/.test(parts[0] ?? "") ? parts[0] : "unparsed";
 		const fail = (reason: VerifyFailure) => ({ ok: false as const, reason, version, segments: parts.length });
 		if (!token) return fail("empty_token");
+		// A real token is only [A-Za-z0-9._-]. Anything else (quotes from un-parsed JSON, a literal "${USER_TOKEN}" from a
+		// single-quoted shell string, a trailing "\r", ...) means the client sent something other than what was minted.
+		if (!TOKEN_CHARSET.test(token)) return fail("bad_charset");
 		if (parts.length !== 3) return fail("malformed_segments");
 		if (parts[0] !== "v1") return fail("unsupported_version");
 		const expected = b64(createHmac("sha256", this.key).update(`v1.${parts[1]}`).digest());
@@ -66,7 +69,8 @@ export class UserTokens {
 	}
 }
 
-export type VerifyFailure = "empty_token" | "malformed_segments" | "unsupported_version" | "bad_signature" | "bad_payload" | "expired";
+const TOKEN_CHARSET = /^[A-Za-z0-9._-]+$/;
+export type VerifyFailure = "empty_token" | "bad_charset" | "malformed_segments" | "unsupported_version" | "bad_signature" | "bad_payload" | "expired";
 export const TOKEN_ALGORITHM = "HMAC-SHA256";
 export const TOKEN_VERSION = "v1";
 
@@ -79,12 +83,14 @@ export function classifyAuthHeader(header: string | undefined): "missing" | "bea
 	return "other_scheme";
 }
 
-export interface AuthDiagEvent { route: string; reason: string; scheme: string; version?: string; segments?: number; tokenLength?: number }
+/** Header-level failures happen before any token exists, so they carry no token version. */
+export interface AuthDiagEvent { reason: string; version?: string }
 
 /**
- * TEMPORARY auth diagnostics. Emits category-level facts only: failure reason, header scheme class, token version,
- * configured algorithm, whether the secret exists. Never the token, the Authorization value, or any secret/derived key.
- * Rate-limited per (route, reason) so a flood of bad requests cannot flood the logs.
+ * TEMPORARY auth diagnostics (remove once the production 401 is understood). Every line carries EXACTLY four facts:
+ *   reason (failure category) | token_version | algorithm | secret_configured
+ * Never the token, the Authorization header, the secret, a derived key, a length, a route or a user id.
+ * Rate-limited per reason so a flood of bad requests cannot flood the logs.
  */
 export class AuthDiagnostics {
 	private readonly last = new Map<string, { at: number; suppressed: number }>();
@@ -94,17 +100,17 @@ export class AuthDiagnostics {
 		private readonly now: () => number = () => Date.now(),
 		private readonly intervalMs = 10_000,
 	) {}
-	startup(build: string): void {
-		this.sink(`[auth-diag] ready build=${build} algorithm=${TOKEN_ALGORITHM} token_version=${TOKEN_VERSION} secret_configured=${this.secretConfigured}`);
+	startup(): void {
+		this.sink(`[auth-diag] ready token_version=${TOKEN_VERSION} algorithm=${TOKEN_ALGORITHM} secret_configured=${this.secretConfigured}`);
 	}
 	failure(e: AuthDiagEvent): void {
-		const k = `${e.route}|${e.reason}`;
+		const version = e.version ?? "none";
+		const k = `${e.reason}|${version}`;
 		const t = this.now();
 		const prev = this.last.get(k);
 		if (prev && t - prev.at < this.intervalMs) { prev.suppressed++; return; }
 		this.last.set(k, { at: t, suppressed: 0 });
-		const extra = [e.version !== undefined ? ` token_version=${e.version}` : "", e.segments !== undefined ? ` segments=${e.segments}` : "", e.tokenLength !== undefined ? ` token_length=${e.tokenLength}` : ""].join("");
-		this.sink(`[auth-diag] verify_failed route=${e.route} reason=${e.reason} header_scheme=${e.scheme}${extra} algorithm=${TOKEN_ALGORITHM} secret_configured=${this.secretConfigured}${prev?.suppressed ? ` (+${prev.suppressed} similar suppressed)` : ""}`);
+		this.sink(`[auth-diag] verify_failed reason=${e.reason} token_version=${version} algorithm=${TOKEN_ALGORITHM} secret_configured=${this.secretConfigured}${prev?.suppressed ? ` suppressed_similar=${prev.suppressed}` : ""}`);
 	}
 }
 
