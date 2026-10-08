@@ -66,6 +66,7 @@ export class BridgeHub {
 			let who: { userId: string; projectId: string };
 			try {
 				const url = new URL(req.url ?? "/", "http://x");
+				if (url.pathname === "/bridge") return; // owned by SandboxHub (Termux agents, sunset-sandbox-v1)
 				if (url.pathname !== "/v1/bridge") return reject(404, "Not Found");
 				if (!(req.headers["sec-websocket-protocol"] ?? "").split(",").map((s) => s.trim()).includes(SUBPROTOCOL)) {
 					return reject(400, "Bad Request");
