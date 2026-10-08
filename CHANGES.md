@@ -42,3 +42,10 @@ Original: 4,166 files / 70.7 MB. This tree: ~910 files (+ `server/`), `node_modu
 - `auth.ts`: new failure category `bad_charset`; `AuthDiagnostics` logs only reason, token_version, algorithm, secret_configured.
 - `index.ts`: `[boot] build=… instance=…` line; `X-Cline-Build` includes the Render commit when available.
 - `test/auth-integration.test.ts`: mint → same middleware; secret/user/ttl matrix; two-process split; diagnostics field + no-leak checks; built-bundle run under node.
+
+## Termux Sandbox Bridge hub (`/bridge`, sunset-sandbox-v1)
+- Fixes Termux agents being refused with `404` (the only upgrade path was `/v1/bridge`; every other path was destroyed).
+- New: `server/src/bridge/sandbox-hub.ts`, `sandbox-protocol.ts`; `BRIDGE_TOKEN` (+ `BRIDGE_MAX_DEVICES`, `BRIDGE_AGENT_MAX_PAYLOAD_BYTES`) in `config.ts`.
+- New admin routes `GET /v1/admin/bridge/devices`, `POST /v1/admin/bridge/execute` (SERVER_AUTH_TOKEN), mounted only when a hub is passed to `createApp`.
+- Edited (small): `bridge/hub.ts` +1 line (ignore `/bridge` instead of 404-ing it), `index.ts` wiring/shutdown, `app.ts` routes + `BRIDGE_TOKEN` added to the redactor, `render.yaml`, `.env.example`, README.
+- Unchanged: all `/v1/*` REST/SSE, `/v1/bridge`, Cline/AI flow, user-token auth. Tests: `test/sandbox-bridge.test.ts` (42).
