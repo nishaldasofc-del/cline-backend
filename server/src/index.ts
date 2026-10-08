@@ -5,6 +5,7 @@ import { AgentService } from "./agent-service";
 import { createApp, userFromRequest } from "./app";
 import { AuthDiagnostics, HttpError, UserTokens } from "./auth";
 import { BridgeHub } from "./bridge/hub";
+import { SandboxHub } from "./bridge/sandbox-hub";
 import { assertSafeId } from "./auth";
 import { loadConfig } from "./config";
 import { ProjectStore, SessionStore } from "./store";
@@ -48,13 +49,26 @@ const hub = new BridgeHub({
 	},
 });
 
+// Termux Sandbox Bridge: agents connect OUT to wss://<host>/bridge (sunset-sandbox-v1) with BRIDGE_TOKEN. Independent of the hub above.
+const sandboxHub = new SandboxHub({
+	token: config.bridgeToken,
+	opTimeoutMs: config.bridgeOpTimeoutMs,
+	commandTimeoutMs: config.commandTimeoutMs,
+	maxPayloadBytes: config.bridgeAgentMaxPayloadBytes,
+	maxDevices: config.bridgeMaxDevices,
+	maxPendingPerDevice: 8,
+	commands: { mode: config.commandsMode, allowlist: config.commandAllowlist },
+});
+console.log(`[boot] sandbox-bridge ${config.bridgeToken ? "enabled at /bridge" : "disabled (set BRIDGE_TOKEN to enable /bridge)"}`);
+
 const agent = new AgentService(config, new BridgeWorkspaceProvider(hub, serverDir, config), hub, projects, sessions);
 await agent.init();
 
-const server = createApp({ config, agent, hub, projects, tokens, instanceId, build: BUILD, diag }).listen(config.port, config.host, () => {
+const server = createApp({ config, agent, hub, sandboxHub, projects, tokens, instanceId, build: BUILD, diag }).listen(config.port, config.host, () => {
 	console.log(`cline-agent-server listening on ${config.host}:${config.port} (${config.providerId}/${config.modelId}, commands=${config.commandsMode}, node ${process.version})`);
 });
 hub.attach(server);
+sandboxHub.attach(server);
 // Render's proxy keeps connections ~60s+; stay above it so we never race a reused socket.
 server.keepAliveTimeout = 65_000;
 server.headersTimeout = 66_000;
@@ -82,6 +96,7 @@ async function shutdown(signal: string) {
 	server.close(); // stop accepting new HTTP connections
 	// Abort running turns: each SSE stream gets an `error` (server_restarting) + `done{ok:false}` and ends cleanly.
 	await agent.shutdown();
+	sandboxHub.close();
 	hub.close(); // devices see a normal close and reconnect (re-authenticating) once the new instance is up
 	try { rmSync(runDir, { recursive: true, force: true }); } catch { /* best effort: the dir is ephemeral anyway */ }
 	process.exit(0);
