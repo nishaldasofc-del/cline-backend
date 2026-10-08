@@ -4,12 +4,15 @@ import type { AgentService } from "./agent-service";
 import { type AuthDiagnostics, assertSafeId, bearer, classifyAuthHeader, HttpError, safeEqual, type UserTokens } from "./auth";
 import type { ServerConfig } from "./config";
 import type { BridgeHub } from "./bridge/hub";
+import type { SandboxHub } from "./bridge/sandbox-hub";
 import type { ProjectStore } from "./store";
 
 export interface AppDeps {
 	config: ServerConfig;
 	agent: AgentService;
 	hub: BridgeHub;
+	/** Termux agents (sunset-sandbox-v1 at /bridge). Optional: when absent the admin bridge routes are not mounted. */
+	sandboxHub?: SandboxHub;
 	projects: ProjectStore;
 	tokens: UserTokens;
 	/** Random per boot; lets clients notice that the (ephemeral) server state was reset. */
@@ -35,6 +38,12 @@ function headerFailureReason(scheme: ReturnType<typeof classifyAuthHeader>): str
 	}
 }
 
+/** Hub-originated routing/validation failures -> HTTP status. Errors reported BY the device (FILE_NOT_FOUND, ...) stay 200 with ok:false. */
+const SANDBOX_HTTP_STATUS: Record<string, number> = {
+	INVALID_REQUEST: 400, UNKNOWN_OPERATION: 400, COMMAND_FORBIDDEN: 403, PAYLOAD_TOO_LARGE: 413,
+	DEVICE_NOT_FOUND: 404, DEVICE_OFFLINE: 409, DEVICE_AMBIGUOUS: 409, DEVICE_BUSY: 429, BRIDGE_TIMEOUT: 504, BAD_RESPONSE: 502,
+};
+
 export function userFromRequest(tokens: UserTokens, req: IncomingMessage, diag?: AuthDiagnostics): string {
 	const header = req.headers.authorization;
 	const scheme = classifyAuthHeader(header);
@@ -58,9 +67,9 @@ export function requireUser(tokens: UserTokens, diag?: AuthDiagnostics) {
 	};
 }
 
-export function createApp({ config, agent, hub, projects, tokens, instanceId, build, diag }: AppDeps) {
+export function createApp({ config, agent, hub, sandboxHub, projects, tokens, instanceId, build, diag }: AppDeps) {
 	const app = express();
-	const redact = makeRedactor([config.apiKey, config.authToken]);
+	const redact = makeRedactor([config.apiKey, config.authToken, ...(config.bridgeToken ? [config.bridgeToken] : [])]);
 	app.disable("x-powered-by");
 	// Identify which build/process answered (random per-boot id, not a secret). Lets you spot a stale deploy, or a mint and a
 	// verify that landed on different processes/services, straight from the response headers.
@@ -84,6 +93,27 @@ export function createApp({ config, agent, hub, projects, tokens, instanceId, bu
 		if (!Number.isInteger(requested) || requested <= 0) throw new HttpError(400, "ttlSeconds must be a positive integer");
 		res.status(201).json(tokens.mint(userId, Math.min(requested, config.userTokenMaxTtlSeconds)));
 	});
+
+	// Admin: operate the Termux devices connected at /bridge. Same gate as the mint route (SERVER_AUTH_TOKEN, i.e. your trusted
+	// backend only). BRIDGE_TOKEN is NOT accepted here: it only lets a device connect, never drive one.
+	if (sandboxHub) {
+		const adminOnly = (req: Request) => {
+			if (!safeEqual(bearer(req.header("authorization")), config.authToken)) throw new HttpError(401, "unauthorized");
+		};
+		app.get("/v1/admin/bridge/devices", (req, res) => {
+			adminOnly(req);
+			res.json({ enabled: sandboxHub.enabled, devices: sandboxHub.listDevices() });
+		});
+		// Body: a sunset-sandbox-v1 operation, e.g. {"type":"read_file","path":"a.txt","deviceId":"pixel-7"}.
+		// `ok` in the envelope is authoritative; the HTTP status only reflects failures to ROUTE (see SANDBOX_HTTP_STATUS).
+		app.post("/v1/admin/bridge/execute", async (req, res) => {
+			adminOnly(req);
+			const body = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>;
+			const r = await sandboxHub.route(body, { deviceId: typeof body.deviceId === "string" ? body.deviceId : undefined, id: typeof body.id === "string" ? body.id : undefined });
+			const status = r.ok ? 200 : (SANDBOX_HTTP_STATUS[r.error?.code ?? ""] ?? 200);
+			res.status(status).type("application/json").send(redact(JSON.stringify(r)));
+		});
+	}
 
 	// Everything else requires a valid per-user token. The user id comes ONLY from the token.
 	app.use("/v1", requireUser(tokens, diag));
