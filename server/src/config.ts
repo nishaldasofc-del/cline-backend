@@ -38,6 +38,15 @@ export interface ServerConfig {
 	maxProjectsPerUser: number;
 	bridgeOpTimeoutMs: number;
 	bridgeMaxPayloadBytes: number;
+	/**
+	 * Shared secret for the outbound Termux agent at /bridge (sunset-sandbox-v1). Deliberately separate from
+	 * SERVER_AUTH_TOKEN. Unset = the /bridge endpoint is disabled (answers 503) and everything else is unaffected.
+	 */
+	bridgeToken?: string;
+	/** Max simultaneously connected Termux devices. */
+	bridgeMaxDevices: number;
+	/** Max WebSocket frame accepted from a Termux agent (a 5 MB file read is ~7 MB as base64 JSON). */
+	bridgeAgentMaxPayloadBytes: number;
 	maxFileBytes: number;
 	userTokenMaxTtlSeconds: number;
 }
@@ -75,6 +84,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
 	const authToken = env.SERVER_AUTH_TOKEN?.trim();
 	if (!authToken) throw new Error("Missing required env var SERVER_AUTH_TOKEN");
 	if (authToken.length < 24) throw new Error("SERVER_AUTH_TOKEN must be at least 24 characters");
+	const bridgeToken = env.BRIDGE_TOKEN?.trim() || undefined;
+	if (bridgeToken !== undefined) {
+		if (bridgeToken.length < 24) throw new Error("BRIDGE_TOKEN must be at least 24 characters (the agent default \"change-me\" is rejected)");
+		if (!/^[\x21-\x7e]+$/.test(bridgeToken)) throw new Error("BRIDGE_TOKEN must be printable ASCII without spaces (it travels in an HTTP header)");
+		if (bridgeToken === authToken) throw new Error("BRIDGE_TOKEN must differ from SERVER_AUTH_TOKEN");
+	}
 	const mode = (env.COMMANDS_MODE?.trim() || "allowlist") as CommandsMode;
 	if (!["off", "allowlist", "passthrough"].includes(mode)) throw new Error("COMMANDS_MODE must be off|allowlist|passthrough");
 	const allow = env.COMMAND_ALLOWLIST?.split(",").map((s) => s.trim()).filter(Boolean);
@@ -102,6 +117,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
 		maxProjectsPerUser: int(env, "MAX_PROJECTS_PER_USER", 20),
 		bridgeOpTimeoutMs: int(env, "BRIDGE_OP_TIMEOUT_MS", 90_000),
 		bridgeMaxPayloadBytes: int(env, "BRIDGE_MAX_PAYLOAD_BYTES", 2 * 1024 * 1024),
+		bridgeToken,
+		bridgeMaxDevices: int(env, "BRIDGE_MAX_DEVICES", 16),
+		bridgeAgentMaxPayloadBytes: int(env, "BRIDGE_AGENT_MAX_PAYLOAD_BYTES", 8 * 1024 * 1024),
 		maxFileBytes: int(env, "MAX_FILE_BYTES", 1024 * 1024),
 		userTokenMaxTtlSeconds: int(env, "USER_TOKEN_MAX_TTL_SECONDS", 24 * 3600),
 	};
