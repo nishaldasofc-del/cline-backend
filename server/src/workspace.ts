@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { computePatchChanges, type ToolExecutors } from "@cline/sdk";
-import type { BridgeHub } from "./bridge/hub";
+import type { ProjectBridge } from "./bridge/project-bridge";
 import { assertWritable, toProjectPath, toVirtual, VIRTUAL_ROOT } from "./bridge/paths";
 import { BridgeError, type PatchChange } from "./bridge/protocol";
 import { prepareCommand } from "./command-policy";
@@ -38,7 +38,7 @@ function withEol(s: string, eol: string): string { return s.replace(/\r\n/g, "\n
 function utf8Len(s: string): number { return Buffer.byteLength(s, "utf8"); }
 
 export class BridgeWorkspaceProvider implements WorkspaceProvider {
-	constructor(private readonly hub: BridgeHub, private readonly scratchRoot: string, private readonly limits: Limits) {}
+	constructor(private readonly hub: ProjectBridge, private readonly scratchRoot: string, private readonly limits: Limits) {}
 
 	async open(input: { userId: string; projectId: string; sessionKey: string }): Promise<WorkspaceHandle> {
 		const { userId, projectId } = input; // bound here from server-validated values, never from model output
