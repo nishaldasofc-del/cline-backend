@@ -48,7 +48,28 @@ export interface ServerConfig {
 	/** Max WebSocket frame accepted from a Termux agent (a 5 MB file read is ~7 MB as base64 JSON). */
 	bridgeAgentMaxPayloadBytes: number;
 	maxFileBytes: number;
+	/**
+	 * Which users may bind a project to which Termux device (BRIDGE_DEVICE_USERS, JSON: {"<deviceId>":["<userId>",...]}).
+	 * Devices authenticate with the shared BRIDGE_TOKEN and carry no owner, so this map IS the ownership record.
+	 * Unset/empty = no user may bind a device (secure default).
+	 */
+	bridgeDeviceUsers: Record<string, string[]>;
 	userTokenMaxTtlSeconds: number;
+}
+
+const ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
+export function parseDeviceUsers(raw: string | undefined): Record<string, string[]> {
+	if (!raw?.trim()) return {};
+	let j: unknown;
+	try { j = JSON.parse(raw); } catch { throw new Error('BRIDGE_DEVICE_USERS must be valid JSON: {"deviceId":["userId"]}'); }
+	if (typeof j !== "object" || j === null || Array.isArray(j)) throw new Error("BRIDGE_DEVICE_USERS must be a JSON object");
+	const out: Record<string, string[]> = {};
+	for (const [dev, users] of Object.entries(j)) {
+		if (!ID_RE.test(dev)) throw new Error(`BRIDGE_DEVICE_USERS: invalid deviceId '${dev.slice(0, 40)}'`);
+		if (!Array.isArray(users) || users.some((u) => typeof u !== "string" || !ID_RE.test(u))) throw new Error(`BRIDGE_DEVICE_USERS: '${dev}' must map to an array of valid user ids (wildcards are not allowed)`);
+		out[dev] = users as string[];
+	}
+	return out;
 }
 
 export const DEFAULT_DATA_DIR = join(tmpdir(), "cline-agent");
@@ -121,6 +142,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
 		bridgeMaxDevices: int(env, "BRIDGE_MAX_DEVICES", 16),
 		bridgeAgentMaxPayloadBytes: int(env, "BRIDGE_AGENT_MAX_PAYLOAD_BYTES", 8 * 1024 * 1024),
 		maxFileBytes: int(env, "MAX_FILE_BYTES", 1024 * 1024),
+		bridgeDeviceUsers: parseDeviceUsers(env.BRIDGE_DEVICE_USERS),
 		userTokenMaxTtlSeconds: int(env, "USER_TOKEN_MAX_TTL_SECONDS", 24 * 3600),
 	};
 }
