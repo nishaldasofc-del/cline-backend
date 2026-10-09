@@ -5,7 +5,9 @@ import { AgentService } from "./agent-service";
 import { createApp, userFromRequest } from "./app";
 import { AuthDiagnostics, HttpError, UserTokens } from "./auth";
 import { BridgeHub } from "./bridge/hub";
+import { ProjectBridgeRouter } from "./bridge/project-router";
 import { SandboxHub } from "./bridge/sandbox-hub";
+import { SunsetBridgeAdapter } from "./bridge/sunset-adapter";
 import { assertSafeId } from "./auth";
 import { loadConfig } from "./config";
 import { ProjectStore, SessionStore } from "./store";
@@ -61,10 +63,12 @@ const sandboxHub = new SandboxHub({
 });
 console.log(`[boot] sandbox-bridge ${config.bridgeToken ? "enabled at /bridge" : "disabled (set BRIDGE_TOKEN to enable /bridge)"}`);
 
-const agent = new AgentService(config, new BridgeWorkspaceProvider(hub, serverDir, config), hub, projects, sessions);
+// One ProjectBridge for the agent loop: projects bound to a Termux device use /bridge, all others use /v1/bridge.
+const projectBridge = new ProjectBridgeRouter(projects, hub, config.bridgeToken ? new SunsetBridgeAdapter(sandboxHub) : undefined, config.bridgeDeviceUsers);
+const agent = new AgentService(config, new BridgeWorkspaceProvider(projectBridge, serverDir, config), projectBridge, projects, sessions);
 await agent.init();
 
-const server = createApp({ config, agent, hub, sandboxHub, projects, tokens, instanceId, build: BUILD, diag }).listen(config.port, config.host, () => {
+const server = createApp({ config, agent, hub, bridge: projectBridge, sandboxHub, projects, tokens, instanceId, build: BUILD, diag }).listen(config.port, config.host, () => {
 	console.log(`cline-agent-server listening on ${config.host}:${config.port} (${config.providerId}/${config.modelId}, commands=${config.commandsMode}, node ${process.version})`);
 });
 hub.attach(server);
