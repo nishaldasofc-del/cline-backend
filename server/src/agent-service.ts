@@ -1,7 +1,7 @@
 import { ClineCore, type CoreSessionEvent } from "@cline/sdk";
 import { buildClineSystemPrompt } from "@cline/shared";
 import { HttpError } from "./auth";
-import type { BridgeHub } from "./bridge/hub";
+import type { ProjectBridge } from "./bridge/project-bridge";
 import type { ServerConfig } from "./config";
 import type { ProjectStore, SessionStore } from "./store";
 import type { WorkspaceHandle, WorkspaceProvider } from "./workspace";
@@ -38,7 +38,7 @@ export class AgentService {
 	constructor(
 		private readonly config: ServerConfig,
 		private readonly workspaces: WorkspaceProvider,
-		private readonly hub: BridgeHub,
+		private readonly hub: ProjectBridge,
 		private readonly projects: ProjectStore,
 		private readonly sessions: SessionStore,
 	) {}
