@@ -4,6 +4,8 @@ import type { AgentService } from "./agent-service";
 import { type AuthDiagnostics, assertSafeId, bearer, classifyAuthHeader, HttpError, safeEqual, type UserTokens } from "./auth";
 import type { ServerConfig } from "./config";
 import type { BridgeHub } from "./bridge/hub";
+import { deviceAllowed } from "./bridge/project-router";
+import type { ProjectBridge } from "./bridge/project-bridge";
 import type { SandboxHub } from "./bridge/sandbox-hub";
 import type { ProjectStore } from "./store";
 
@@ -11,6 +13,8 @@ export interface AppDeps {
 	config: ServerConfig;
 	agent: AgentService;
 	hub: BridgeHub;
+	/** Per-project transport (Android hub or Termux device). Defaults to `hub`. */
+	bridge?: ProjectBridge;
 	/** Termux agents (sunset-sandbox-v1 at /bridge). Optional: when absent the admin bridge routes are not mounted. */
 	sandboxHub?: SandboxHub;
 	projects: ProjectStore;
@@ -67,7 +71,8 @@ export function requireUser(tokens: UserTokens, diag?: AuthDiagnostics) {
 	};
 }
 
-export function createApp({ config, agent, hub, sandboxHub, projects, tokens, instanceId, build, diag }: AppDeps) {
+export function createApp({ config, agent, hub, bridge, sandboxHub, projects, tokens, instanceId, build, diag }: AppDeps) {
+	const pbridge: ProjectBridge = bridge ?? hub;
 	const app = express();
 	const redact = makeRedactor([config.apiKey, config.authToken, ...(config.bridgeToken ? [config.bridgeToken] : [])]);
 	app.disable("x-powered-by");
@@ -118,16 +123,35 @@ export function createApp({ config, agent, hub, sandboxHub, projects, tokens, in
 	// Everything else requires a valid per-user token. The user id comes ONLY from the token.
 	app.use("/v1", requireUser(tokens, diag));
 	const uid = (res: Response): string => res.locals.userId as string;
+	// Same 403 whether the device is unknown or just not yours, so device ids cannot be probed.
+	const assertDeviceAccess = (userId: string, deviceId: string) => {
+		if (!deviceAllowed(config.bridgeDeviceUsers, userId, deviceId)) throw new HttpError(403, "device not available to this user", "device_forbidden");
+	};
 
 	app.get("/v1/info", (_req, res) => void res.json({ provider: config.providerId, model: config.modelId, commandsMode: config.commandsMode, webFetch: config.enableWebFetch, storage: "ephemeral", instanceId, maxConcurrentTurns: config.maxConcurrentTurns, maxConcurrentTurnsPerUser: config.maxConcurrentTurnsPerUser, ...agent.stats() }));
 
 	app.post("/v1/projects", (req, res) => {
 		const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
-		const p = projects.create(uid(res), name || "project");
-		res.status(201).json({ projectId: p.id, name: p.name });
+		const userId = uid(res);
+		const wanted = req.body?.deviceId;
+		if (wanted !== undefined && wanted !== null) assertDeviceAccess(userId, assertSafeId("deviceId", wanted));
+		const p = projects.create(userId, name || "project");
+		if (typeof wanted === "string") projects.bindDevice(userId, p.id, wanted);
+		res.status(201).json({ projectId: p.id, name: p.name, ...(p.deviceId ? { deviceId: p.deviceId } : {}) });
 	});
 	app.get("/v1/projects", (_req, res) => {
-		res.json({ projects: projects.list(uid(res)).map((p) => ({ projectId: p.id, name: p.name, bridgeConnected: hub.isConnected(p.userId, p.id) })) });
+		res.json({ projects: projects.list(uid(res)).map((p) => ({ projectId: p.id, name: p.name, ...(p.deviceId ? { deviceId: p.deviceId } : {}), bridgeConnected: pbridge.isConnected(p.userId, p.id) })) });
+	});
+	// Bind a project to a Termux device (body {"deviceId":"..."}) or back to the Android bridge ({"deviceId":null}).
+	app.put("/v1/projects/:projectId/device", (req, res) => {
+		const userId = uid(res);
+		const raw = req.body?.deviceId;
+		const p = projects.get(userId, req.params.projectId);
+		if (raw === null) { projects.bindDevice(userId, p.id, undefined); return void res.json({ projectId: p.id }); }
+		const deviceId = assertSafeId("deviceId", raw);
+		assertDeviceAccess(userId, deviceId);
+		projects.bindDevice(userId, p.id, deviceId);
+		res.json({ projectId: p.id, deviceId, bridgeConnected: pbridge.isConnected(userId, p.id) });
 	});
 	app.delete("/v1/projects/:projectId", async (req, res) => {
 		const userId = uid(res);
