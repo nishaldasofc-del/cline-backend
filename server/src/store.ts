@@ -14,6 +14,8 @@ export interface Project {
 	userId: string;
 	name: string;
 	createdAt: number;
+	/** Termux device (sunset-sandbox-v1 at /bridge) this project runs on. Unset = the project uses the Android bridge at /v1/bridge. */
+	deviceId?: string;
 }
 
 /** Ownership is enforced here: every lookup requires the caller's userId. */
@@ -30,6 +32,12 @@ export class ProjectStore {
 	get(userId: string, projectId: string): Project {
 		const p = this.items.get(projectId);
 		if (!p || p.userId !== userId) throw new HttpError(404, `project not found${EXPIRED_HINT}`, "project_not_found");
+		return p;
+	}
+	/** Bind/unbind the Termux device. Authorisation (may this user use this device?) is the caller's job. */
+	bindDevice(userId: string, projectId: string, deviceId: string | undefined): Project {
+		const p = this.get(userId, projectId);
+		if (deviceId === undefined) delete p.deviceId; else p.deviceId = deviceId;
 		return p;
 	}
 	list(userId: string): Project[] {
