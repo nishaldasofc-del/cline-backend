@@ -15,6 +15,8 @@ services:
       - key: BRIDGE_TOKEN
         sync: false          # REQUIRED for the Termux agent at /bridge. Set in the dashboard (>= 24 chars, must NOT equal
                              # SERVER_AUTH_TOKEN) and use the SAME value as BRIDGE_TOKEN in Termux. Unset = /bridge answers 503.
+      - key: BRIDGE_DEVICE_USERS
+        sync: false          # JSON {"<deviceId>":["<userId>"]}: which users may bind projects to which Termux device. Unset = nobody.
       - key: PROVIDER_ID
         value: groq
       - key: MODEL_ID
